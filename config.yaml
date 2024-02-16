@@ -1,0 +1,38 @@
+#Config for this project
+
+#Credentials for database connection
+mysql_credentials:
+  username : "root"
+  host : "localhost"
+  password :
+
+#List of functions to run for data retreival
+data_fetch:
+  
+  #Params related to api calls
+  api_run_params:
+    
+    #Number of seconds between api calls
+    pause_between_calls : .3
+    
+    #Number of seconds in case of timeouts
+    pause_between_null_response: 5
+    
+    #Number of retry attempts for an api
+    max_reattempts: 3
+  
+  #Functions to run on first start
+  run_on_init:
+    - app_information
+  
+  #Information to run on cycle
+  run_on_cycle:
+    
+    #The minute(s) of the hour that we update our data on
+    update_cycle_time :
+      - 0
+      - 30
+    
+    #Functions to run on cycle
+    cycle_fns:
+      - player_counts

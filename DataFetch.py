@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import json
 import requests
+import yaml
 
 #For env vars
 import keyring
@@ -146,7 +147,7 @@ def get_request(url, params=None,attempt=1):
         print('\rAttempting API request again.')
         
         #Recursive call of function
-        return get_request(url,params=params)
+        return get_request(url, params=params)
     
     #Now we check our response is not null
     if response:
@@ -169,7 +170,7 @@ def get_request(url, params=None,attempt=1):
 
 
 #Function for getting game data
-def get_game_data(parser,pause,connector):
+def get_game_data(config,connector,initial=False):
     """
     Function to get information about games and store in SQL table
 
@@ -188,11 +189,21 @@ def get_game_data(parser,pause,connector):
     None
 
     """
-    #Our list of information
-    game_data = []
-    
+
+    #If this is our inital run, run the initial functions
+    if initial:
+        parsers = config['data_fetch']['run_on_init']
+    #Otherwise use the cycle functions
+    else:
+        parsers = config['data_fetch']['run_on_cycle']['cycle_fns']
+        
+    #If we don't have any parsers, we replace the None type with an empty list
+    if parsers == None:
+        parsers = []
+        
     #First call to update the game info table
-    app_information(connector)
+    if 'app_information' in parsers:
+        app_information(connector)
     
     #Now pull from the game_info table
     cursor = connector.cursor()
@@ -203,23 +214,38 @@ def get_game_data(parser,pause,connector):
                    """
                    )
     
+    #Create a dict that has data for each function
+    return_dict = {}
+    
+    functions = [fn for fn in parsers if fn != 'app_information']
+    
+    for fn in parsers:
+        return_dict[fn] = []
+    
     #Loop through the rows of our game_list
     for appid in cursor:
         
-        #Now we retrieve the data with the parser logic
-        data = eval(f'{parser}(appid)')
-        if data:
-            game_data.append(data)
+        #Loop through our functions
+        for fn in functions:
+                       
+            #Now we retrieve the data with the parser logic
+            data = eval(f'{fn}(appid)')
+            if data:
+                return_dict[fn].append(data)
         
     
         
         #Prevents overloading the api
-        time.sleep(pause)
+        time.sleep(config['data_fetch']['api_run_params']['pause_between_calls'])
     
     #Insert data into SQL table
-    eval(f'{parser}_insert(game_data,connector)')
+    for fn in functions:
+        eval(f'{fn}_insert(return_dict[fn],connector)')
     
     cursor.close()
+    
+    return
+
 
 #Round to nearest hour
 def hour_rounder(t):
@@ -235,10 +261,14 @@ def hour_rounder(t):
     Timestamp of closest hour
 
     """
-    # Rounds to nearest hour by adding a timedelta hour if minute >= 30
-    return (t.replace(second=0, microsecond=0, minute=0, hour=t.hour)
-               +timedelta(hours=t.minute//30))
-
+    discard = timedelta(minutes=t.minute % 10,
+                             seconds=t.second,
+                             microseconds=t.microsecond)
+    t -= discard
+    if discard >=timedelta(minutes=5):
+        t += timedelta(minutes=10)
+    
+    return t
 
 #Creating function to parse a steam player count
 def player_counts(appid):
@@ -271,9 +301,10 @@ def player_counts(appid):
         month = f'0{current_time.month}'[-2:]
         day = f'0{current_time.day}'[-2:]
         hour = f'0{current_time.hour}'[-2:]
+        minute = f'0{current_time.minute}'[-2:]
     
         #Actually making the string
-        current_time = f'{year}-{month}-{day}-{hour}:00:00'
+        current_time = f'{year}-{month}-{day}-{hour}:{minute}:00'
     
         return_data = [appid[0],current_time,response['response']['player_count']]
     
@@ -423,15 +454,21 @@ def app_information(connector):
     
     print(f'game_info table sucessfully updated at {current_time}')
     
+    return
+    
         
 #Now we actually do the main function
 if __name__ == '__main__':
     
+    #Get informationf rom the config
+    with open('config.yaml','r') as file:
+        config = yaml.safe_load(file)
+    
+    
     #If the user has created credentials.json
-    if 'credentials.json' in os.listdir():
-        print('Used credentials.json to create credentials')
-        f = open('credentials.json')
-        credentials = json.load(f)
+    if 'mysql_credentials' in config.keys():
+        print('Used credentials from config')
+        credentials = config['mysql_credentials']
     
     #Otherwise ask for input
     else:
@@ -444,18 +481,58 @@ if __name__ == '__main__':
         credentials['password'] = str(input("Password:"))
         credentials['host'] = str(input('Host:'))
     
-    
+    #Setting up our connection and database
     cnx = setup_database(credentials)
+    
+    #Run initial functions
+    get_game_data(config,cnx,initial=True)
+    
+    #Closing the connection, we reopen when we need to update the table
+    cnx.close()
+    
+
     
     #Creating our program loop
     while(True):
         
-        #Updating our game_info table
-        get_game_data('player_counts',.3,cnx)
+        #Determining how long until next cycle
+        minutes = config['data_fetch']['run_on_cycle']['update_cycle_time']
+        current_time = datetime.now()
         
-        print('Waiting for the next hour')
+        min_wait = 60
+        #Loop through times
+        for minute in minutes:
+            #If replacing the minute is smaller, we've passed that time
+            if current_time.replace(minute=minute) < current_time:
+                wait = (current_time.replace(hour=current_time.hour+1,minute=minute)-
+                        current_time)
+            #Otherwise we haven't
+            else:
+                wait = (current_time.replace(minute=minute)-current_time)
+                
+            #Is the min wait smaller?
+            if min_wait > wait.seconds//60:
+                min_wait = wait.seconds//60
         
-        #Once finished with your work, sleep for an hour
-        time.sleep(3540)
-    
-    cnx.close()
+        #Waiting specified minutes for next API attempt
+        print(f'\rWaiting {min_wait} minutes for next update cycle',end='')
+        time.sleep(30)  
+        
+        if datetime.now().minute in config['data_fetch']['run_on_cycle']['update_cycle_time']:
+            
+            print('\n',end='')
+            
+            #Connect to the database
+            cnx = MSQL.connect(user=credentials['username'],
+                                         password=credentials['password'],
+                                         host=credentials['host'],
+                                         database='steam_db')
+            
+            #Updating our game_info table
+            get_game_data(config,cnx)
+            
+            #Now that we're done with the connection for now, we close the database
+            cnx.close()
+            
+            #So we don't double insert at a minute
+            time.sleep(60)
