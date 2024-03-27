@@ -522,29 +522,34 @@ def game_tags_genres(app_id):
     response =  get_request('https://steamspy.com/api.php?request=appdetails',
                             params={'appid':app_id})
     
-  
-    #If we get a response
-    if response['name']:
-        #Creating our dict
-        return_dict = {}
+    #Check that we get a response
+    if response:
         
-        #Assigning app to return dict
-        return_dict['app_id'] = app_id
+        #Check we get a proper name
+        if response['name']:
+            #Creating our dict
+            return_dict = {}
         
-        #Getting genres
-        #We split by ', ' in case there are multiple genres
-        return_dict['genres'] = response['genre'].split(', ')
+            #Assigning app to return dict
+            return_dict['app_id'] = app_id
+        
+            #Getting genres
+            #We split by ', ' in case there are multiple genres
+            return_dict['genres'] = response['genre'].split(', ')
     
-        #Getting tags
-        #We'll just grab the top 5 tags if there are at least 5 tags
-        if len(response['tags'].keys()) > 5:
-            return_dict['tags'] = list(response['tags'].keys())[:5]
+            #Getting tags
+            #We'll just grab the top 5 tags if there are at least 5 tags
+            if len(response['tags'].keys()) > 5:
+                return_dict['tags'] = list(response['tags'].keys())[:5]
+            else:
+                return_dict['tags'] = list(response['tags'])
+    
+            return return_dict
+    
+        #Otherwise return none
         else:
-            return_dict['tags'] = list(response['tags'])
+            return None
     
-        return return_dict
-    
-    #Otherwise return none
     else:
         return None
  
