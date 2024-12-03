@@ -24,6 +24,9 @@ from datetime import datetime, timedelta
 #For database set up
 import mysql.connector as MSQL
 
+# Setting pandas option to ignore deprecation
+pd.set_option('future.no_silent_downcasting', True)
+
 
 #=================================
 #Setting up Functions
@@ -134,6 +137,19 @@ def setup_database(credentials):
             );
     """
     
+    
+    # We'll also define Views which will make things a lot easier for us to 
+    # analyze later
+    Views = {}
+    
+    Views['player_count_by_game'] = """
+        CREATE OR REPLACE VIEW player_count_by_game AS
+        SELECT game_info.name, player_count.timestamp, player_count.count
+        FROM game_info
+        INNER JOIN player_count 
+        ON game_info.app_id = player_count.app_id;
+        """
+    
     #Creating our cursor again
     cursor = cnx.cursor()
     
@@ -144,6 +160,14 @@ def setup_database(credentials):
         cnx.commit()
     
     print("Tables successfully created")
+    
+    #Looping through our views and creating them
+    for view in Views.keys():
+        print(f"\tCreating View: {view}")
+        cursor.execute(Views[view])
+        cnx.commit()
+        
+    print("Views successfully created")
     
     #Closing our cursor
     cursor.close()

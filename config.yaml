@@ -4,7 +4,7 @@
 mysql_credentials:
   username : "root"
   host : "localhost"
-  password : 
+  password : ""
 
 #List of functions to run for data retreival
 data_fetch:
@@ -31,7 +31,11 @@ data_fetch:
     #The minute(s) of the hour that we update our data on
     update_cycle_time :
       - 0
+      - 10
+      - 20
       - 30
+      - 40
+      - 50
     
     #Functions to run on cycle
     cycle_fns:
