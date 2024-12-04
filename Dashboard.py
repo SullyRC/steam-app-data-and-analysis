@@ -35,11 +35,22 @@ else:
 engine = create_engine(f'mysql+mysqlconnector://{credentials["username"]}'
                        f':{credentials["password"]}@{credentials["host"]}'
                        f':3306/steam_db')
-#Creating our connection
 
-df = pd.read_sql("SELECT * FROM player_count_by_game;",engine)
+# Initial dataframe
+def fetch_initial_data():
+    query = """
+    SELECT timestamp, SUM(count) AS count
+    FROM player_count_by_game
+    GROUP BY timestamp
+    ORDER BY timestamp DESC;
+    """
+    df = pd.read_sql(query, engine)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    return df
 
+df = fetch_initial_data()
 
+# Initialize app
 app = Dash()
 
 app.layout = html.Div([
@@ -48,74 +59,126 @@ app.layout = html.Div([
         style={'fontSize': '18px', 'marginBottom': '10px'}
     ),
     html.Div(
-        id='slider-output',  # Display the human-readable range here
-        style={'marginTop': '20px', 'fontSize': '16px'}
-    ),
-    html.Div(
         dcc.RangeSlider(
             id='datetime_RangeSlider',
-            min=df['timestamp'].min().timestamp(),
-            max=df['timestamp'].max().timestamp(),
-            value=[
-                df['timestamp'].min().timestamp(),
-                df['timestamp'].max().timestamp()
-            ],
-            marks={
-                int(t.timestamp()): t.strftime('%d:%m:%Y %H:%M')
-                for t in pd.date_range(
-                    df['timestamp'].min(),
-                    df['timestamp'].max(),
-                    freq='D'  # Adjust frequency as needed
-                )
-            },
-            tooltip={"placement": "bottom", "always_visible": True}
-        ),
-        style={
-            'margin': '20px',
-            'padding': '10px'
-        }
+            tooltip={"placement": "bottom", "always_visible": False},
+                     step=10*60, # 10 minute inteval
+                     dots=False,
+                     marks=None
+                     ),
+        style={'margin': '20px', 'padding': '10px'}
     ),
-    
-    dcc.Graph(id='player-count')
+    html.Div(
+        id='slider-output',
+        style={'marginTop': '20px', 'fontSize': '16px'}
+    ),
+    dcc.Graph(id='player-count'),
+    dcc.Graph(id='treemap-count'),
+    dcc.Interval(
+        id='interval-component',
+        interval=10*60*1000,  # 10 minutes in milliseconds
+        n_intervals=0
+    )
 ])
 
-
-# Callback to update the displayed range
-@callback(
-    Output('slider-output', 'children'),
-    Input('datetime_RangeSlider', 'value')
-)
-def update_slider_output(value):
-    if value:
-        start, end = [pd.to_datetime(ts, unit='s') for ts in value]
-        return f"Selected Range: {start.strftime('%d:%m:%Y %H:%M')} - {end.strftime('%d:%m:%Y %H:%M')}"
-    return "Select a range to view details."
-
-
-
-@callback(
-    Output('player-count', 'figure'),
-    Input('datetime_RangeSlider', 'value')
-)
-def update_player_count_graph(datetime_range):
-    # Convert timestamps back to datetime
-    start, end = [pd.to_datetime(ts, unit='s') for ts in datetime_range]
-
-    # Use parameterized query to prevent SQL injection
+# Function to fetch new data
+def fetch_new_data():
     query = """
-        SELECT timestamp, SUM(count) AS player_count
-        FROM player_count_by_game
-        WHERE timestamp >= %(start)s AND timestamp <= %(end)s
-        GROUP BY timestamp;
+    SELECT timestamp, SUM(count) AS count
+    FROM player_count_by_game
+    WHERE name LIKE 'Palworld'
+    GROUP BY timestamp
+    ORDER BY timestamp DESC;
     """
-    # Execute query with parameters
-    df = pd.read_sql(query, engine, params={'start': start, 'end': end})
+    new_data = pd.read_sql(query, engine)
+    new_data['timestamp'] = pd.to_datetime(new_data['timestamp'])
+    return new_data
 
-    # Create a Plotly line chart
-    fig = px.line(df, x='timestamp', y='player_count', title='Player Count Over Time')
+# Function to fetch treemap data
+def fetch_treemap_data(start, end):
+    query = f"""
+        SELECT name, SUM(count) AS count 
+        FROM player_count_by_game
+        WHERE timestamp >= \'{start.strftime('%Y-%m-%d %H:%M:%S')}\'
+        AND timestamp <= \'{end.strftime('%Y-%m-%d %H:%M:%S')}\'
+        GROUP BY name;
+    """
+    treemap_df = pd.read_sql(query, engine)
+    
+    # For formatting the output
+    treemap_df['label'] = treemap_df.apply(
+        lambda row: f"{row['name']}<br>{row['count']} players",
+        axis=1
+    )
+    return treemap_df
+
+# Function to create our treemap
+def create_treemap(treemap_df):
+    
+    # Create the treemap
+    fig = px.treemap(
+        treemap_df,
+        path=['name'],  # Treemap hierarchy (game names)
+        values='count',  # Size of areas based on player count
+        title='Player Distribution by Game',
+        color='count',  # Color based on player count
+        color_continuous_scale='Blues',
+        labels = { row['name']:f"{row['name']}\n{row['count']}" 
+                  for (index,row) in treemap_df.iterrows()}
+    )
+    
+    # Add the labels to the treemap
+    fig.data[0].textinfo = 'label'  # Show custom labels
+    fig.data[0].hovertemplate = (
+        "Game: %{label}<br>Total Players: %{value}<extra></extra>"
+    )  # Enhance hover tooltips
+    
+    fig.update_layout(
+        margin=dict(t=30, l=0, r=0, b=0),  # Adjust layout margins
+        title_x=0.5  # Center-align the title
+    )
     
     return fig
 
+@callback(
+    [Output('datetime_RangeSlider', 'min'),
+     Output('datetime_RangeSlider', 'max'),
+     Output('datetime_RangeSlider', 'value')],
+    Input('interval-component', 'n_intervals')
+)
+def update_continuous_slider(n_intervals):
+    global df
+    df = fetch_new_data()  # Fetch updated data
+    min_timestamp = df['timestamp'].min().timestamp()
+    max_timestamp = df['timestamp'].max().timestamp()
+
+    # Set slider's min, max, and initial value (full range)
+    return min_timestamp, max_timestamp, [min_timestamp, max_timestamp]
+
+@callback(
+    [Output('slider-output', 'children'),
+     Output('player-count', 'figure'),
+     Output('treemap-count','figure')],
+    Input('datetime_RangeSlider', 'value')
+)
+def update_content(value):
+    if not value:
+        return "Select a range to view details.", px.line(title='Player Count Over Time')
+
+    start, end = [pd.to_datetime(ts, unit='s') for ts in value]
+    output_text = f"Selected Range: {start.strftime('%d:%m:%Y %H:%M')} - {end.strftime('%d:%m:%Y %H:%M')}"
+    filtered_df = df[(df['timestamp'] >= start) & (df['timestamp'] <= end)]
+
+    fig = px.line(filtered_df, x='timestamp', y='count', title='Player Count Over Time')
+    fig.update_layout(title_x=0.5)
+    
+    treemap_df = fetch_treemap_data(start, end)
+    
+    tree_fig = create_treemap(treemap_df)
+    
+    return output_text, fig, tree_fig
+
 
 if __name__ == '__main__':
+    
     app.run(debug=True)

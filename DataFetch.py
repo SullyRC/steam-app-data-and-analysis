@@ -147,7 +147,8 @@ def setup_database(credentials):
         SELECT game_info.name, player_count.timestamp, player_count.count
         FROM game_info
         INNER JOIN player_count 
-        ON game_info.app_id = player_count.app_id;
+        ON game_info.app_id = player_count.app_id
+        WHERE player_count.timestamp >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH);
         """
     
     #Creating our cursor again
@@ -302,7 +303,10 @@ def get_game_data(config,connector,initial=False):
     
     #Insert data into SQL table
     for fn in functions:
-        eval(f'{fn}_insert(return_dict[fn],connector)')
+        # Check that we have the data 
+        if fn in return_dict.keys():
+            eval(f'{fn}_insert(return_dict[fn],connector)')
+
     
     cursor.close()
     
