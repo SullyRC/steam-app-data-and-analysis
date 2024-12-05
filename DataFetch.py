@@ -144,12 +144,23 @@ def setup_database(credentials):
     
     Views['player_count_by_game'] = """
         CREATE OR REPLACE VIEW player_count_by_game AS
-        SELECT game_info.name, player_count.timestamp, player_count.count
+        SELECT game_info.app_id, game_info.name, player_count.timestamp,
+        player_count.count
         FROM game_info
         INNER JOIN player_count 
         ON game_info.app_id = player_count.app_id
         WHERE player_count.timestamp >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH);
         """
+        
+    Views['complete_game_info'] = """
+        CREATE OR REPLACE VIEW complete_game_info AS
+        SELECT game_info.app_id, name, developer, rating, price, genre, tag
+        FROM game_info 
+        INNER JOIN game_genre ON game_info.app_id = game_genre.app_id
+        INNER JOIN genre ON game_genre.genre_id = genre.genre_id
+        INNER JOIN game_tag ON game_info.app_id = game_tag.app_id
+        INNER JOIN tag ON game_tag.tag_id = tag.tag_id;
+    """
     
     #Creating our cursor again
     cursor = cnx.cursor()
